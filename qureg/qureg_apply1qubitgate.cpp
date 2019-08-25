@@ -23,7 +23,167 @@
 /// @file qureg_apply1qubitgate.cpp
 /// @brief Define the @c QubitRegister methods corresponding to the application of single-qubit gates.
 
+//Ryan: Primary gate computation function
 /////////////////////////////////////////////////////////////////////////////////////////
+template <class Type>
+double QubitRegister<Type>::SZ_HP_Distrpair(unsigned position, TM2x2<Type> const&m)
+{
+#ifdef INTELQS_HAS_MPI
+  MPI_Status status;
+  MPI_Comm comm = openqu::mpi::Environment::comm();
+  std::size_t myrank = openqu::mpi::Environment::rank();
+
+  assert(position < num_qubits);
+  int strideexp = position;
+  int memexp = num_qubits - openqu::ilog2(openqu::mpi::Environment::size());
+  int pstrideexp = strideexp - memexp;
+
+  //  Steps:     1.         2.           3.              4.
+  //          i    j   | i    j   |  i      j     |  i       j
+  //          s1   d1  | s1   d1  |  s1     d1&s1 |  s1&d1   d1&s1
+  //          s2   d2  | s2   d2  |  s2&d2  d2    |  s2&d2   d2&s2
+  //          T    T   | d2   s1  |  d2&s2  s1&d1 |  T       T
+
+  int tag1 = 1, tag2 = 2;
+  int tag3 = 3, tag4 = 4;
+  int tag5 = 5, tag6 = 6;
+  int tag7 = 7, tag8 = 8;
+  
+  std::size_t glb_start = UL(myrank) * LocalSize();
+
+  // std::string s;
+  unsigned int itask, jtask;
+  if (check_bit(glb_start, UL(position)) == 0)
+  {
+      itask = myrank;
+      jtask = itask + (1 << pstrideexp);
+      // s = openqu::toString(itask) + "==>" + openqu::toString(jtask);
+  }
+  else
+  {
+      jtask = myrank;
+      itask = jtask - (1 << pstrideexp);
+      // s = openqu::toString(jtask) + "==>" + openqu::toString(itask);
+  }
+
+
+  // 1. allocate temp buffer
+  //tmp buffer is now allocated in BlkDecompress function 
+
+  std::size_t lcl_size_half = num_block / 2L;
+
+  double t, tnet = 0;
+  int len_count = 1;
+  int cache_status;
+  for(size_t c = 0; c < lcl_size_half; c++)
+  {
+    // if(!myrank) printf("c=%lu lcl_size_half=%lu lcl_chujnk=%lu\n", c, lcl_size_half, lcl_chunk);
+    if (itask == myrank)  // this is itask
+    {
+        // 2. src sends s1 to dst into dT
+        //    dst sends d2 to src into dT
+        t = sec();
+        tmp_len = 0;
+        MPI_Sendrecv_x(&(list_len[c]), len_count, jtask, tag1, &tmp_len,
+                       len_count, jtask, tag2, comm, &status);
+        if(tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+        tmp_compressed_blk = (unsigned char*) malloc(tmp_len);
+        MPI_Sendrecv_x(list_compressed_blk[c], list_len[c], jtask, tag3, tmp_compressed_blk,
+                       tmp_len, jtask, tag4, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+
+        cache_status = CheckCache(lcl_size_half + c, list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], -1, tmp_compressed_blk, tmp_len);
+        if (cache_status != 0){
+
+          t = sec();
+          DecompressTmpState();
+          DecompressLclState(lcl_size_half + c);
+          decompression_time += sec() - t;
+  
+          // 3. src and dst compute
+          t = sec();
+          Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+          compute_time += sec() - t;
+  
+          t = sec();
+          CompressLclState(lcl_size_half + c);
+          CompressTmpState();
+          compression_time += sec() - t;
+
+          if (cache_status == 1){
+            SetCache(lcl_size_half + c, list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], -1, tmp_compressed_blk, tmp_len);
+          }
+        }
+
+        t = sec();
+        MPI_Sendrecv_x(&tmp_len, len_count, jtask, tag5, &(list_len[c]),
+                       len_count, jtask, tag6, comm, &status);
+        if (list_compressed_blk[c] != NULL) free(list_compressed_blk[c]);
+        list_compressed_blk[c] = (unsigned char*) malloc(list_len[c]);
+        MPI_Sendrecv_x(tmp_compressed_blk, tmp_len, jtask, tag7, list_compressed_blk[c],
+                       list_len[c], jtask, tag8, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+    }
+    else  // this is jtask
+    {
+        // 2. src sends s1 to dst into dT
+        //    dst sends d2 to src into dT
+        t = sec();
+        tmp_len = 0;
+        MPI_Sendrecv_x(&(list_len[lcl_size_half + c]), len_count, itask, tag2, &tmp_len,
+                       len_count, itask, tag1, comm, &status);
+        if(tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+        tmp_compressed_blk = (unsigned char*) malloc(tmp_len);
+        MPI_Sendrecv_x(list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], itask, tag4, tmp_compressed_blk,
+                       tmp_len, itask, tag3, comm, &status);
+        network_time += sec() - t;
+        tnet += sec() - t;
+
+        cache_status = CheckCache(-1, tmp_compressed_blk, tmp_len, c, list_compressed_blk[c], list_len[c]);
+        if (cache_status != 0){
+          t = sec();
+          DecompressTmpState();
+          DecompressLclState(c);
+          decompression_time += sec() - t;
+  
+          t = sec();
+          Loop_SN(0L, block_size, tmp_state, state, 0L, 0L, m, specialize, timer);
+          compute_time += sec() - t;
+  
+          t = sec();
+          CompressLclState(c);
+          CompressTmpState();
+          compression_time += sec() - t;
+          if (cache_status == 1){
+            SetCache(-1, tmp_compressed_blk, tmp_len, c, list_compressed_blk[c], list_len[c]);
+          }
+        }
+
+        t = sec();
+        MPI_Sendrecv_x(&tmp_len, len_count, itask, tag6, &(list_len[lcl_size_half + c]),
+                       len_count, itask, tag5, comm, &status);
+        if (list_compressed_blk[lcl_size_half + c] != NULL) free(list_compressed_blk[lcl_size_half + c]);
+        list_compressed_blk[lcl_size_half + c] = (unsigned char*) malloc(list_len[lcl_size_half + c]);
+        MPI_Sendrecv_x(tmp_compressed_blk, tmp_len, itask, tag8, list_compressed_blk[lcl_size_half + c],
+                       list_len[lcl_size_half + c], itask, tag7, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+    }
+  }
+
+  double netsize = 2.0 * sizeof(Type) * 2.0 * D(lcl_size_half), netbw = netsize / tnet;
+  // printf("[%3d] size=%10lld tnet = %.3lf s netsize = %10.0lf bytes netbw = %6.2lf GB/s\n",
+  //      it, sizeof(Type)*lcl_size_half, tnet, netsize, netbw / 1e9);
+
+  if (timer) {timer->record_cm(tnet, netbw); };
+#else
+  assert(0);
+#endif
+  return 0.0;
+}
+
 template <class Type>
 double QubitRegister<Type>::HP_Distrpair(unsigned position, TM2x2<Type> const&m)
 {
@@ -180,6 +340,7 @@ bool QubitRegister<Type>::Apply1QubitGate_helper(unsigned qubit_,  TM2x2<Type> c
   assert(qubit_ < num_qubits);
   unsigned qubit = (*permutation)[qubit_]; 
   assert(qubit < num_qubits);
+  double t;
 
   TODO(Add diagonal special case)
 
@@ -190,6 +351,7 @@ bool QubitRegister<Type>::Apply1QubitGate_helper(unsigned qubit_,  TM2x2<Type> c
   log2_nprocs = openqu::ilog2(openqu::mpi::Environment::size());
 #endif
   unsigned M = num_qubits - log2_nprocs;
+  unsigned B = (unsigned)std::log2(block_size);
   std::size_t P = qubit;
 
   std::size_t src_glb_start = UL(myrank) * LocalSize();
@@ -202,10 +364,66 @@ bool QubitRegister<Type>::Apply1QubitGate_helper(unsigned qubit_,  TM2x2<Type> c
   if (timer)
       timer->Start(gate_name, P);
 
+  int cache_status;
   if (P < M)
   {
       assert(eind - sind <= LocalSize());
-      Loop_DN(sind, eind, UL(P), state, state, 0UL, (1UL << P), m, specialize, timer);
+      //Loop_DN(sind, eind, UL(P), state, state, 0UL, (1UL << P), m, specialize, timer);
+      if (P < B){
+        for (int i = 0; i < num_block; i++){
+          cache_status = CheckCache(i, list_compressed_blk[i], list_len[i]);
+          if (cache_status != 0){
+            t = sec();
+            DecompressLclState(i);
+            decompression_time += sec() - t;
+
+            t = sec();
+            Loop_DN(0, block_size, UL(P), state, state, 0UL, (1UL << P), m, specialize, timer);
+            compute_time += sec() - t;
+
+            t = sec();
+            CompressLclState(i);
+            compression_time += sec() - t;
+            if (cache_status == 1){
+              SetCache(i, list_compressed_blk[i], list_len[i]);
+            }
+          }
+        }
+      } else {
+        unsigned int p_dist = P - B;
+        int idx_i, idx_j;
+        for (idx_i = 0; idx_i < num_block; idx_i = idx_i + (1 << (p_dist + 1))){
+          for (idx_j = 0; idx_j < (1 << p_dist); idx_j++){
+            int a = idx_i + idx_j;
+            int b = idx_i + idx_j + (1 << p_dist);
+            cache_status = CheckCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+            if (cache_status != 0){
+              if (tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+              tmp_compressed_blk = list_compressed_blk[b];
+              list_compressed_blk[b] = NULL;
+              tmp_len = list_len[b];
+              t = sec();
+              DecompressTmpState();
+              DecompressLclState(a);
+              decompression_time += sec() - t;
+              t = sec();
+              Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+              compute_time += sec() - t;
+              t = sec();
+              CompressLclState(a);
+              CompressTmpState();
+              compression_time += sec() - t;
+              if (list_compressed_blk[b] != NULL) free(list_compressed_blk[b]);
+              list_compressed_blk[b] = tmp_compressed_blk;
+              tmp_compressed_blk = NULL;
+              list_len[b] = tmp_len;
+              if (cache_status == 1){
+                SetCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+              }
+            }
+          }
+        }
+      }
   }
   else
   {
@@ -219,7 +437,7 @@ bool QubitRegister<Type>::Apply1QubitGate_helper(unsigned qubit_,  TM2x2<Type> c
       }
       else
       {
-          HP_Distrpair(P, m);
+          SZ_HP_Distrpair(P, m);
       }
   }
 
@@ -252,6 +470,10 @@ void QubitRegister<Type>::Apply1QubitGate(unsigned qubit, TM2x2<Type> const&m)
 
   L:
   Apply1QubitGate_helper(qubit, m, 0UL, LocalSize());
+  if (enable_blk_cache == 1){
+    ClearCache();
+  }
+  CompressionInfo();
 }
 
 

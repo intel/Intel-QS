@@ -30,6 +30,184 @@
 /// @param qubit_low index of the second qubit
 /// @param m 4x4 matrix corresponding to the quantum gate
 template <class Type>
+double QubitRegister<Type>::SZ_HP_Distrpair(unsigned control_position, unsigned target_position,
+                                         TM2x2<Type> const&m)
+{
+#ifdef INTELQS_HAS_MPI
+  MPI_Status status;
+  MPI_Comm comm = openqu::mpi::Environment::comm();
+  std::size_t myrank = openqu::mpi::Environment::rank();
+
+  assert(target_position < num_qubits);
+  assert(control_position < num_qubits);
+  std::size_t M = num_qubits - openqu::ilog2(openqu::mpi::Environment::size());
+  std::size_t C = UL(control_position), T = UL(target_position);
+
+  //  Steps:     1.         2.           3.              4.
+  //          i    j   | i    j   |  i      j     |  i       j
+  //          s1   d1  | s1   d1  |  s1     d1&s1 |  s1&d1   d1&s1
+  //          s2   d2  | s2   d2  |  s2&d2  d2    |  s2&d2   d2&s2
+  //          T    T   | d2   s1  |  d2&s2  s1&d1 |  T       T
+
+  int tag1 = 1, tag2 = 2;
+  int tag3 = 3, tag4 = 4;
+  int tag5 = 5, tag6 = 6;
+  int tag7 = 7, tag8 = 8;
+
+  std::size_t glb_start = UL(myrank) * LocalSize();
+  unsigned int itask, jtask;
+
+  if (check_bit(glb_start, T) == 0)
+  {
+      itask = myrank;
+      jtask = itask + (1 << (T - M));
+  }
+  else
+  {
+      jtask = myrank;
+      itask = jtask - (1 << (T - M));
+  }
+
+  // 1. allocate temp buffer
+  //tmp buffer is now allocated in BlkDecompress function 
+  std::size_t lcl_size_half = num_block / 2L;
+  
+
+
+#if 0
+  size_t lcl_chunk = 128;
+  if (lcl_chunk > lcl_size_half)
+      lcl_chunk = lcl_size_half;
+  else
+      assert((lcl_size_half % lcl_chunk) == 0);
+#else
+
+#endif
+
+  double t, tnet = 0;
+  int len_count = 1;
+  int cache_status;
+  for(size_t c = 0; c < lcl_size_half; c++)
+  {
+    if (itask == myrank)  // this is itask
+    {
+        // 2. src sends s1 to dst into dT
+        //    dst sends d2 to src into dT
+        t = sec();
+        tmp_len = 0;
+        MPI_Sendrecv_x(&(list_len[c]), len_count, jtask, tag1, &tmp_len,
+                       len_count, jtask, tag2, comm, &status);
+        if(tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+        tmp_compressed_blk = (unsigned char*) malloc(tmp_len);
+        MPI_Sendrecv_x(list_compressed_blk[c], list_len[c], jtask, tag3, tmp_compressed_blk,
+                       tmp_len, jtask, tag4, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+
+        cache_status = CheckCache(lcl_size_half + c, list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], -1, tmp_compressed_blk, tmp_len);
+        if (cache_status != 0){
+
+          t = sec();
+          DecompressTmpState();
+          DecompressLclState(lcl_size_half + c);
+          decompression_time += sec() - t;
+  
+          // 3. src and dst compute
+          if (M - C == 1) {
+            t = sec();
+            Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+            compute_time += sec() - t;
+          } else {
+            t = sec();
+            Loop_DN((UL(1) << C), block_size, C, state, tmp_state, 0L, 0L, m, specialize, timer);
+            compute_time += sec() - t;
+          }
+  
+          t = sec();
+          CompressLclState(lcl_size_half + c);
+          CompressTmpState();
+          compression_time += sec() - t;
+
+          if (cache_status == 1){
+            SetCache(lcl_size_half + c, list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], -1, tmp_compressed_blk, tmp_len);
+          }
+
+        }
+
+        t = sec();
+        MPI_Sendrecv_x(&tmp_len, len_count, jtask, tag5, &(list_len[c]),
+                       len_count, jtask, tag6, comm, &status);
+        if (list_compressed_blk[c] != NULL) free(list_compressed_blk[c]);
+        list_compressed_blk[c] = (unsigned char*) malloc(list_len[c]);
+        MPI_Sendrecv_x(tmp_compressed_blk, tmp_len, jtask, tag7, list_compressed_blk[c],
+                       list_len[c], jtask, tag8, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+    }
+    else  // this is jtask
+    {
+        // 2. src sends s1 to dst into dT
+        //    dst sends d2 to src into dT
+        t = sec();
+        tmp_len = 0;
+        MPI_Sendrecv_x(&(list_len[lcl_size_half + c]), len_count, itask, tag2, &tmp_len,
+                       len_count, itask, tag1, comm, &status);
+        if(tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+        tmp_compressed_blk = (unsigned char*) malloc(tmp_len);
+        MPI_Sendrecv_x(list_compressed_blk[lcl_size_half + c], list_len[lcl_size_half + c], itask, tag4, tmp_compressed_blk,
+                       tmp_len, itask, tag3, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+
+        cache_status = CheckCache(-1, tmp_compressed_blk, tmp_len, c, list_compressed_blk[c], list_len[c]);
+        if (cache_status != 0){
+
+          t = sec();
+          DecompressTmpState();
+          DecompressLclState(c);
+          decompression_time += sec() - t;
+  
+          if (M - C == 1)
+          {}    // this is intentional special case: nothing happens
+          else{
+            t = sec();
+            Loop_DN((UL(1) << C), block_size, C, tmp_state, state, 0L, 0L, m, specialize, timer);
+            compute_time += sec() - t;
+          }
+  
+          t = sec();
+          CompressLclState(c);
+          CompressTmpState();
+          compression_time += sec() - t;
+
+          if (cache_status == 1){
+            SetCache(-1, tmp_compressed_blk, tmp_len, c, list_compressed_blk[c], list_len[c]);
+          }
+        }
+
+        t = sec();
+        MPI_Sendrecv_x(&tmp_len, len_count, itask, tag6, &(list_len[lcl_size_half + c]),
+                       len_count, itask, tag5, comm, &status);
+        if (list_compressed_blk[lcl_size_half + c] != NULL) free(list_compressed_blk[lcl_size_half + c]);
+        list_compressed_blk[lcl_size_half + c] = (unsigned char*) malloc(list_len[lcl_size_half + c]);
+        MPI_Sendrecv_x(tmp_compressed_blk, tmp_len, itask, tag8, list_compressed_blk[lcl_size_half + c],
+                       list_len[lcl_size_half + c], itask, tag7, comm, &status);
+        tnet += sec() - t;
+        network_time += sec() - t;
+    }
+  }
+
+  double netsize = 2.0 * sizeof(Type) * 2.0 * D(lcl_size_half), netbw = netsize / tnet;
+  if (timer) timer->record_cm(tnet, netbw);
+
+#else
+  assert(0);
+#endif
+
+  return 0.0;
+}
+
+template <class Type>
 double QubitRegister<Type>::HP_Distrpair(unsigned control_position, unsigned target_position,
                                          TM2x2<Type> const&m)
 {
@@ -144,8 +322,6 @@ double QubitRegister<Type>::HP_Distrpair(unsigned control_position, unsigned tar
 }
 
 
-
-
 /////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Helper for the application of controlled one-qubit gates.
 // Apply gate to the state vector in the range sind-eind
@@ -156,6 +332,7 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
 {
   assert(control_ != qubit_);
   assert(control_ < num_qubits);
+  double t;
 #if 0
   printf("New permutation: ");
   for(unsigned i = 0; i < permutation->size(); i++) printf("%u ", (*permutation)[i]);
@@ -176,9 +353,10 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
   log2_nprocs = openqu::ilog2(openqu::mpi::Environment::size());
 #endif
   unsigned M = num_qubits - log2_nprocs;
+  unsigned B = (unsigned)std::log2(block_size);
   bool HasDoneWork = false;
 
-  std::size_t src_glb_start = UL(myrank) * LocalSize();
+  std::size_t src_glb_start = 0;
   // check for special case of diagonal
   bool diagonal = (m[0][1].real() == 0. && m[0][1].imag() == 0. &&
                    m[1][0].real() == 0. && m[1][0].imag() == 0.);
@@ -211,6 +389,9 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
   #endif
   {
       std::size_t cpstrideexp = C - M;
+      unsigned int p_dist = T - B;
+      unsigned int c_dist = C - B;
+      int cache_status;
 
       if(C < M  && T < M)
       {
@@ -224,6 +405,7 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
             // Otherwise, we skip computation all together
             if((C >= log2llc) && (LocalSize() > (eind - sind)))
             {
+              cout << "error: ApplyControlled1QubitGate_helper" << endl << flush;
                 if(check_bit(sind, C) == 1)
                 {
                     Loop_DN(sind, eind, T, state, state,
@@ -233,31 +415,252 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
             }
             else
             {
-                Loop_TN(state, 
-                        sind,  eind,        1UL<<C+1UL,
-                        1UL<<C, 1UL<<C+1UL, 1UL<<T+1UL,
-                        0L,     1UL<<T,     1UL<<T, m, specialize, timer);
-                HasDoneWork = true;
+              if (T < B){
+                if (C < B){
+                  for (int i = 0; i < num_block; i++){
+                    cache_status = CheckCache(i, list_compressed_blk[i], list_len[i]);
+                    if (cache_status != 0){
+                      t = sec();
+                      DecompressLclState(i);
+                      decompression_time += sec() - t;
+                      t = sec();
+                      Loop_TN(state, 
+                              0UL,  block_size,        1UL<<C+1UL,
+                              1UL<<C, 1UL<<C+1UL, 1UL<<T+1UL,
+                              0L,     1UL<<T,     1UL<<T, m, specialize, timer);
+                      compute_time += sec() - t;
+                      t = sec();
+                      CompressLclState(i);
+                      compression_time += sec() - t;
+                      if (cache_status == 1){
+                        SetCache(i, list_compressed_blk[i], list_len[i]);
+                      }
+                    }
+                  }
+                } else {
+                  for (int i = 0; i < num_block; i++){
+                    if ((i >> c_dist) % 2 != 0){
+                      cache_status = CheckCache(i, list_compressed_blk[i], list_len[i]);
+                      if (cache_status != 0){
+                        t = sec();
+                        DecompressLclState(i);
+                        decompression_time += sec() - t;
+                        t = sec();
+                        Loop_DN(0, block_size, UL(T), state, state, 0UL, (1UL << T), m, specialize, timer);
+                        compute_time += sec() - t;
+                        t = sec();
+                        CompressLclState(i);
+                        compression_time += sec() - t;
+                        if (cache_status == 1){
+                          SetCache(i, list_compressed_blk[i], list_len[i]);
+                        }
+                      }
+                    }
+                  }
+                }
+              } else {
+                int idx_i, idx_j;
+                for (idx_i = 0; idx_i < num_block; idx_i = idx_i + (1 << (p_dist + 1))){
+                  for (idx_j = 0; idx_j < (1 << p_dist); idx_j++){
+                    int a = idx_i + idx_j;
+                    int b = idx_i + idx_j + (1 << p_dist);
+                    if ((a >> c_dist) % 2 != 0){
+                      cache_status = CheckCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                      if (cache_status != 0){
+                        if (tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+                        tmp_compressed_blk = list_compressed_blk[b];
+                        list_compressed_blk[b] = NULL;
+                        tmp_len = list_len[b];
+                        t = sec();
+                        DecompressTmpState();
+                        DecompressLclState(a);
+                        decompression_time += sec() - t;
+                        t = sec();
+                        Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+                        compute_time += sec() - t;
+                        t = sec();
+                        CompressLclState(a);
+                        CompressTmpState();
+                        decompression_time += sec() - t;
+                        if (list_compressed_blk[b] != NULL) free(list_compressed_blk[b]);
+                        list_compressed_blk[b] = tmp_compressed_blk;
+                        tmp_compressed_blk = NULL;
+                        list_len[b] = tmp_len;
+                        if (cache_status == 1){
+                          SetCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              
+              HasDoneWork = true;
             }
           
         }
         else
         {
-            Loop_TN(state, 
-                    sind,     eind,       1UL<<T+1UL,
-                    0L,       1UL<<T,     1UL<<C+1UL,
-                    1UL<<C,   1UL<<C+1UL, 1UL<<T, m, specialize, timer);
-            HasDoneWork = true;
+          if (T < B){
+            for (int i = 0; i < num_block; i++){
+              cache_status = CheckCache(i, list_compressed_blk[i], list_len[i]);
+              if (cache_status != 0){
+                t = sec();
+                DecompressLclState(i);
+                decompression_time += sec() - t;
+                t = sec();
+                Loop_TN(state, 
+                        0UL,     block_size,       1UL<<T+1UL,
+                        0L,       1UL<<T,     1UL<<C+1UL,
+                        1UL<<C,   1UL<<C+1UL, 1UL<<T, m, specialize, timer);
+                compute_time += sec() - t;
+                t = sec();
+                CompressLclState(i);
+                compression_time += sec() - t;
+                if (cache_status == 1){
+                  SetCache(i, list_compressed_blk[i], list_len[i]);
+                }
+              }
+            }  
+          } else {
+            if (C < B){
+              int idx_i, idx_j;
+              for (idx_i = 0; idx_i < num_block; idx_i = idx_i + (1 << (p_dist + 1))){
+                for (idx_j = 0; idx_j < (1 << p_dist); idx_j++){
+                  int a = idx_i + idx_j;
+                  int b = idx_i + idx_j + (1 << p_dist);
+
+                  cache_status = CheckCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                  if (cache_status != 0){  
+                    if (tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+                    tmp_compressed_blk = list_compressed_blk[b];
+                    list_compressed_blk[b] = NULL;
+                    tmp_len = list_len[b];
+                    t = sec();
+                    DecompressTmpState();
+                    DecompressLclState(a);
+                    decompression_time += sec() - t;
+                    t = sec();
+                    Loop_DN((UL(1) << C), block_size, C, state, tmp_state, 0L, 0L, m, specialize, timer);
+                    compute_time += sec() - t;
+                    //Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+                    t = sec();
+                    CompressLclState(a);
+                    CompressTmpState();
+                    compression_time += sec() - t;
+                    if (list_compressed_blk[b] != NULL) free(list_compressed_blk[b]);
+                    list_compressed_blk[b] = tmp_compressed_blk;
+                    tmp_compressed_blk = NULL;
+                    list_len[b] = tmp_len;
+                    if (cache_status == 1){
+                      SetCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                    }
+                  }
+                }
+              }
+            } else {
+              int idx_i, idx_j;
+              for (idx_i = 0; idx_i < num_block; idx_i = idx_i + (1 << (p_dist + 1))){
+                for (idx_j = 0; idx_j < (1 << p_dist); idx_j++){
+                  int a = idx_i + idx_j;
+                  int b = idx_i + idx_j + (1 << p_dist);
+                  if ((a >> c_dist) % 2 != 0){
+                    cache_status = CheckCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                    if (cache_status != 0){  
+                      if (tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+                      tmp_compressed_blk = list_compressed_blk[b];
+                      list_compressed_blk[b] = NULL;
+                      tmp_len = list_len[b];
+                      t = sec();
+                      DecompressTmpState();
+                      DecompressLclState(a);
+                      decompression_time += sec() - t;
+                      t = sec();
+                      Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+                      compute_time += sec() - t;
+                      t = sec();
+                      CompressLclState(a);
+                      CompressTmpState();
+                      compression_time += sec() - t;
+                      if (list_compressed_blk[b] != NULL) free(list_compressed_blk[b]);
+                      list_compressed_blk[b] = tmp_compressed_blk;
+                      tmp_compressed_blk = NULL;
+                      list_len[b] = tmp_len;
+                      if (cache_status == 1){
+                        SetCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          HasDoneWork = true;
         }
       }
       else if (C >= M && T < M)
       {
+        if (T < B){
           assert(C > T);
           if(((myrank >> cpstrideexp) % 2) != 0)
           {
-              Loop_DN(sind, eind, T, state, state, 0L, (1UL << T), m, specialize, timer);
+            for (int i = 0; i < num_block; i++){
+              cache_status = CheckCache(i, list_compressed_blk[i], list_len[i]);
+              if (cache_status != 0){
+                t = sec();
+                DecompressLclState(i);
+                decompression_time += sec() - t;
+                t = sec();
+                Loop_DN(0, block_size, T, state, state, 0UL, (1UL << T), m, specialize, timer);
+                compute_time += sec() - t;
+                t = sec();
+                CompressLclState(i);
+                compression_time += sec() - t;
+                if (cache_status == 1){
+                  SetCache(i, list_compressed_blk[i], list_len[i]);
+                }
+              }
+            }
               HasDoneWork = true;
           }
+        } else {
+          if(((myrank >> cpstrideexp) % 2) != 0)
+          {
+            int idx_i, idx_j;
+            for (idx_i = 0; idx_i < num_block; idx_i = idx_i + (1 << (p_dist + 1))){
+              for (idx_j = 0; idx_j < (1 << p_dist); idx_j++){
+                int a = idx_i + idx_j;
+                int b = idx_i + idx_j + (1 << p_dist);
+                cache_status = CheckCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                if (cache_status != 0){
+                  if (tmp_compressed_blk != NULL) free(tmp_compressed_blk);
+                  tmp_compressed_blk = list_compressed_blk[b];
+                  list_compressed_blk[b] = NULL;
+                  tmp_len = list_len[b];
+                  t = sec();
+                  DecompressTmpState();
+                  DecompressLclState(a);
+                  decompression_time += sec() - t;
+                  t = sec();
+                  Loop_SN(0L, block_size, state, tmp_state, 0L, 0L, m, specialize, timer);
+                  compute_time += sec() - t;
+                  t = sec();
+                  CompressLclState(a);
+                  CompressTmpState();
+                  compression_time += sec() - t;
+                  if (list_compressed_blk[b] != NULL) free(list_compressed_blk[b]);
+                  list_compressed_blk[b] = tmp_compressed_blk;
+                  tmp_compressed_blk = NULL;
+                  list_len[b] = tmp_len;
+                  if (cache_status == 1){
+                    SetCache(a, list_compressed_blk[a], list_len[a], b, list_compressed_blk[b], list_len[b]);
+                  }
+                }
+              }
+            }
+            HasDoneWork = true;
+          }
+        }
       }
       else if (C >= M && T >= M)
       {
@@ -272,7 +675,7 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
             }
             else
             {
-                HP_Distrpair(T, m);
+                SZ_HP_Distrpair(T, m);
                 // printf("HPD 1\n");
             }
             HasDoneWork = true;
@@ -289,12 +692,12 @@ bool QubitRegister<Type>::ApplyControlled1QubitGate_helper(unsigned control_, un
               md[0][0] = {1.0, 0};
               md[0][1] = md[1][0] = {0., 0.};
               md[1][1] = (check_bit(src_glb_start, T) == 0) ? m[0][0] : m[1][1];
-              TODO(Insert Loop_SN specialization for this case)
+              //TODO(Insert Loop_SN specialization for this case)
               Loop_DN(sind, eind, C, state, state, 0, 1UL<<C, md, specialize, timer); 
           }
           else
           {
-              HP_Distrpair(C, T, m);
+              SZ_HP_Distrpair(C, T, m);
               // printf("HPD 2\n");
           }
           HasDoneWork = true;
@@ -337,6 +740,10 @@ void QubitRegister<Type>::ApplyControlled1QubitGate(unsigned control, unsigned q
   }
   L:
   ApplyControlled1QubitGate_helper(control, qubit, m, 0UL, LocalSize());
+  if (enable_blk_cache == 1){
+    ClearCache();
+  }
+  CompressionInfo();
 }
 
 

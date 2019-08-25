@@ -49,11 +49,13 @@ unsigned long qumalloc(string args) {
     }
 
     // Ensure wavefunction register is in the allowed range.
-    if ((num_qubits > 0) && (num_qubits <= 43)) {
+    if ((num_qubits > 0) && (num_qubits <= 128)) {
         psi1 = new QubitRegister<Type>(num_qubits);
 
         if (psi1) {
-            (*psi1)[0] = 1;
+            //if (openqu::mpi::Environment::rank() == 0){
+            //    (*psi1)[0] = 1;
+            //}
             fPsiAllocated = true;
             cout << "Allocated ["<<num_qubits<<"] qubits."<<endl;
             return 0;
@@ -63,8 +65,6 @@ unsigned long qumalloc(string args) {
     {
         cerr << ".malloc (size) - allocations in the range from 1..43 only."<<endl;
     }
- 
-
     return 1;
 }
 
