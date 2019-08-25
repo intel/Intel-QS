@@ -41,28 +41,32 @@ unsigned long unk(string args) {
 
 
 unsigned long S_handler(string args) {
-    cout << "S"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "S"<< " [" << args << "]" <<endl;
     psi1->ApplyPauliSqrtZ(query_qubit_id(args));
     return 0;
 }
 
 
 unsigned long X_handler(string args) {
-    cout << "X"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "X"<< " [" << args << "]" <<endl;
     psi1->ApplyPauliX(query_qubit_id(args));
     return 0;
 }
 
 
 unsigned long T_handler(string args) {
-    cout << "T"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "T"<< " [" << args << "]" <<endl;
     psi1->ApplyT(query_qubit_id(args));
     return 0;
 }
 
 
 unsigned long Tdag_handler(string args) {
-    cout << "Tdag"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "Tdag"<< " [" << args << "]" <<endl;
     psi1->ApplyRotationZ(query_qubit_id(args),TDAG_THETA);
     return 0;
 }
@@ -75,15 +79,17 @@ unsigned long CNOT_handler(string args) {
 
     qubit1 = query_qubit_id(args.substr(0,token_end));
     qubit2 = query_qubit_id(args.substr(token_end+1,args.length()));
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "CNOT"<< " [" << args << "]" <<endl;
 
-    cout << "CNOT"<< " [" << args << "]" <<endl;
     psi1->ApplyCPauliX(qubit1,qubit2);
     return 0;
 }
 
 
 unsigned long H_handler(string args) {
-    cout << "H"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "H"<< " [" << args << "]" <<endl;
     psi1->ApplyHadamard(query_qubit_id(args));
     return 0;
 }
@@ -93,7 +99,8 @@ unsigned long MeasZ_handler(string args) {
     using Type = ComplexDP;
     Type measurement = 0.0;
     
-    cout << "MeasZ"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "MeasZ"<< " [" << args << "]" <<endl;
     measurement = psi1->GetProbability(query_qubit_id(args));
     cout << measurement << endl;
     return 0;
@@ -101,10 +108,157 @@ unsigned long MeasZ_handler(string args) {
 
 
 unsigned long PrepZ_handler(string args) {
-    cout << "PrepZ"<< " [" << args << "]" <<endl;
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "PrepZ"<< " [" << args << "]" <<endl;
     return 0;
 }
 
+unsigned long Y_handler(string args) {
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "Y"<< " [" << args << "]" <<endl;
+    }
+
+    psi1->ApplyPauliY(query_qubit_id(args));
+    return 0;
+}
+
+unsigned long Z_handler(string args) {
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "Z"<< " [" << args << "]" <<endl;
+    }
+
+    psi1->ApplyPauliZ(query_qubit_id(args));
+    return 0;
+}
+
+unsigned long Rx_handler(string args) {
+    int qubit;
+    double angle;
+    int token_end = args.find_first_of(',');
+
+    qubit = query_qubit_id(args.substr(0,token_end));
+    angle = stod(args.substr(token_end+1,args.length()));
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "RX"<< " [" << qubit << ", " << angle << "]" <<endl;
+    }
+
+    psi1->ApplyRotationX(qubit, angle);
+    return 0;
+}
+
+unsigned long Rz_handler(string args) {
+    int qubit;
+    double angle;
+    int token_end = args.find_first_of(',');
+
+    qubit = query_qubit_id(args.substr(0,token_end));
+    angle = stod(args.substr(token_end+1,args.length()));
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "RZ"<< " [" << qubit << ", " << angle << "]" <<endl;
+    }
+
+    psi1->ApplyRotationZ(qubit, angle);
+    return 0;
+}
+
+unsigned long Cz_handler(string args) {
+    int qubit1,
+        qubit2;
+    int token_end = args.find_first_of(',');
+
+    qubit1 = query_qubit_id(args.substr(0,token_end));
+    qubit2 = query_qubit_id(args.substr(token_end+1,args.length()));
+    if (openqu::mpi::Environment::rank() == 0)
+      cout << "CZ"<< " [" << args << "]" <<endl;
+
+    psi1->ApplyCPauliZ(qubit1,qubit2);
+    return 0;
+}
+
+unsigned long SQRTX_handler(string args) {
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "SQRTX"<< " [" << args << "]" <<endl;
+    }
+
+    psi1->ApplyPauliSqrtX(query_qubit_id(args));
+    return 0;
+}
+
+unsigned long SQRTY_handler(string args) {
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "SQRTY"<< " [" << args << "]" <<endl;
+    }
+
+    psi1->ApplyPauliSqrtY(query_qubit_id(args));
+    return 0;
+}
+
+unsigned long Tof_handler(string args) {
+    int qubit1,
+        qubit2,
+        qubit3;
+    int token_end = args.find_first_of(',');
+
+    qubit1 = query_qubit_id(args.substr(0,token_end));
+    string sub_str = args.substr(token_end+1, args.length());
+    token_end = sub_str.find_first_of(',');
+    qubit2 = query_qubit_id(sub_str.substr(0, token_end));
+    qubit3 = query_qubit_id(sub_str.substr(token_end+1,sub_str.length()));
+
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "Tof"<< " [" << args << "]" << qubit1 << "," << qubit2 << "," << qubit3 <<endl;
+    }
+
+    psi1->ApplyToffoli(qubit1,qubit2, qubit3);
+    return 0;
+}
+
+unsigned long Dump_handler(string args) {
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "Dump" <<endl;
+    }
+    psi1->dumpbin("state.bin");
+    return 0;
+}
+
+unsigned long OutputState_handler(string args) {
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "OutputState" <<endl;
+    }
+    psi1->OutputStatesToFile(9999999);
+    return 0;
+}
+
+unsigned long OutputBlk_handler(string args) {
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "OutputBlk" <<endl;
+    }
+    psi1->OutputCompressedByteToFile();
+    return 0;
+}
+
+unsigned long InputBlk_handler(string args) {
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "InputBlk" <<endl;
+    }
+    psi1->InputCompressedByteFromFile();
+    if (openqu::mpi::Environment::rank() == 0) {
+        cout << "Successfully input compressed blk from file" << endl << flush;
+    }
+    
+    return 0;
+}
+
+unsigned long qubit_handler(string args) {
+    query_qubit_id(args);
+    return 0;
+}
 
 // Hash table containing the QASM operation string and the function to call to
 // handle the operation with the qHiPSTER simulation.
@@ -119,9 +273,23 @@ unordered_map<string, function<long(string)>> qufun_table = {\
                                                 {"PrepZ",PrepZ_handler},
                                                 {"T", T_handler},
                                                 {"X", X_handler},
+                                                {"Y", Y_handler},
+                                                {"Z", Z_handler},
                                                 {"Tdag", Tdag_handler},
                                                 {"S", S_handler},
                                                 {"MeasZ", MeasZ_handler},
+                                                {"Tof", Tof_handler},
+                                                {"Toffoli", Tof_handler},
+                                                {"Rx", Rx_handler},
+                                                {"Rz", Rz_handler},
+                                                {"CZ", Cz_handler},
+                                                {"SQRTX", SQRTX_handler},
+                                                {"SQRTY", SQRTY_handler},
+                                                {"Dump", Dump_handler},
+                                                {"qubit", qubit_handler},
+                                                {"OutputState", OutputState_handler},
+                                                {"OutputBlk", OutputBlk_handler},
+                                                {"InputBlk", InputBlk_handler},
                                                 {"*", unk},
 };
 
