@@ -25,6 +25,8 @@ ifeq ($(bigmpi),1)
  LDFLAGS := ${BIGMPI_LIB} ${LDFLAGS}
 endif
 
+LDFLAGS := ${LDFLAGS} ${SZ_LIB}
+
 EXECS := benchgates.exe\
 	 testgates.exe\
 	 qft_test.exe\
