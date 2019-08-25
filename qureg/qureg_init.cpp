@@ -22,6 +22,9 @@
 /// @file qureg_init.cpp
 /// @brief Define the @c QubitRegister methods to initialize the quantum register.
 
+#define BLOCK_SIZE 1048576 //16 = 16 MB block size.
+#define TOTAL_MEMORY 160 // 160GB for compressed state vector.
+
 /////////////////////////////////////////////////////////////////////////////////////////
 template <class Type>
 QubitRegister<Type>::QubitRegister()
@@ -133,7 +136,12 @@ void QubitRegister<Type>::Initialize(std::size_t new_num_qubits, std::size_t tmp
       this->tmp_spacesize_ =  (lcl_size_half > 4194304) ? 4194304 : lcl_size_half;
   assert((lcl_size_half % TmpSize()) == 0);
   #endif
+  block_size = LocalSize() / 32L;
+  if (block_size > BLOCK_SIZE)
+    block_size = BLOCK_SIZE;
 
+  this->tmp_spacesize_ = block_size;
+  num_block = LocalSize() / block_size;
   this->num_qubits = new_num_qubits;
   assert(LocalSize() >= 1L);
 
@@ -141,7 +149,6 @@ void QubitRegister<Type>::Initialize(std::size_t new_num_qubits, std::size_t tmp
   permutation = new Permutation(new_num_qubits);
 
   if (!myrank) printf("Specialization is off\n");
-
   timer = NULL;
 }
 
@@ -155,11 +162,14 @@ void QubitRegister<Type>::Allocate(std::size_t new_num_qubits, std::size_t tmp_s
   myrank = openqu::mpi::Environment::rank();
   nprocs = openqu::mpi::Environment::size();
   num_ranks_per_node = openqu::mpi::Environment::get_nrankspernode();
+  x_rpn = num_ranks_per_node;
 #endif
 
   imported_state = false;
   specialize = false;
   fusion = false;
+  compress_level = 0;
+  if (new_num_qubits > 35) compress_level = 1;
 
   Initialize(new_num_qubits, tmp_spacesize_);
 
@@ -180,10 +190,88 @@ void QubitRegister<Type>::Allocate(std::size_t new_num_qubits, std::size_t tmp_s
           s = D(num_ranks_per_node) * D(TmpSize()) * D(sizeof(state[0]));
           printf("      temporary storage = %.5lf MB \n", s / MB);
       }
+      cout << "Number of block per rank = " << num_block << endl;
+      cout << "Block size = " << block_size * D(sizeof(state[0])) / MB << " MB" << endl;
   }
 
+  std::size_t nbytes_blk = block_size * sizeof(state[0]);
+#if defined(USE_MKL_MALLOC)
+  list_compressed_blk = (unsigned char**) mkl_malloc(sizeof(unsigned char*) * num_block, 64);
+  list_len = (size_t*) mkl_malloc(sizeof(size_t) * num_block, 64);
+#else
+  list_compressed_blk = (unsigned char**) malloc(sizeof(unsigned char*) * num_block);
+  list_len = (size_t*) malloc(sizeof(size_t) * num_block);
+#endif
+
+  for (int i = 0; i < num_block; i++){
+    list_compressed_blk[i] = NULL;
+  }
 #if defined(USE_MM_MALLOC)
-  state = (Type *)_mm_malloc(nbytes, 256);
+  if (!myrank){
+#if defined(USE_MKL_MALLOC)
+    state = (Type *)mkl_malloc(nbytes_blk, 256);
+#else
+    state = (Type *)_mm_malloc(nbytes_blk, 256);
+#endif
+
+    for (std::size_t i = 0; i < block_size; i++) state[i] = {0, 0};
+    CompressLclState(1);
+    for (int i = 2; i < num_block; i++){
+      list_len[i] = list_len[1];
+      list_compressed_blk[i] = (unsigned char*) malloc(list_len[1]);
+      memcpy(list_compressed_blk[i], list_compressed_blk[1], list_len[1]);
+    }
+    state[0] = 1;
+    CompressLclState(0);
+    
+  }
+  else{
+#if defined(USE_MKL_MALLOC)
+    state = (Type *)mkl_malloc(nbytes_blk, 256);
+#else
+    state = (Type *)_mm_malloc(nbytes_blk, 256);
+#endif
+    for (std::size_t i = 0; i < block_size; i++) state[i] = {0, 0};
+    CompressLclState(0);
+    for (int i = 1; i < num_block; i++){
+      list_len[i] = list_len[0];
+      list_compressed_blk[i] = (unsigned char*) malloc(list_len[0]);
+      memcpy(list_compressed_blk[i], list_compressed_blk[0], list_len[0]);
+    }
+  }
+  tmp_compressed_blk = NULL;
+  tmp_len = 0;
+  compression_time = 0;
+  decompression_time = 0;
+  compute_time = 0;
+  network_time = 0;
+  remain_space = TOTAL_MEMORY * 1024 * 1024 * (1024 / num_ranks_per_node);
+  num_cache_line = 128;
+  cache_top = 0;
+  enable_blk_cache = 1;
+  blk_cache_hit = 0;
+  blk_cache_size = 0;
+  lossy = 0;
+  hit_rate_0_count = 0;
+
+#if defined(USE_MKL_MALLOC)
+  list_cache_blk = (unsigned char**) mkl_malloc(sizeof(unsigned char*) * num_cache_line * 4, 64);
+  list_cache_len = (size_t*) mkl_malloc(sizeof(size_t) * num_cache_line * 4, 64);
+#else
+  list_cache_blk = (unsigned char**) malloc(sizeof(unsigned char*) * num_cache_line * 4);
+  list_cache_len = (size_t*) malloc(sizeof(size_t) * num_cache_line * 4);
+#endif
+  for (int i = 0; i < num_cache_line * 4; i++){
+    list_cache_blk[i] = NULL;
+    list_cache_len[i] = 0;
+  }
+#if defined(USE_MKL_MALLOC)
+  tmp_state = (Type *)mkl_malloc(nbytes_blk, 256);
+#else
+  tmp_state = (Type *)_mm_malloc(nbytes_blk, 256);
+#endif
+  openqu::mpi::barrier();
+
 #else
   state_storage.Resize(num_amplitudes);
   state = &state_storage[0];
@@ -202,6 +290,7 @@ QubitRegister<Type>::QubitRegister(std::size_t new_num_qubits, Type *state,
 }
 
 
+//Ryan: This one is used.
 /////////////////////////////////////////////////////////////////////////////////////////
 template <class Type>
 QubitRegister<Type>::QubitRegister(std::size_t new_num_qubits, 
@@ -210,7 +299,7 @@ QubitRegister<Type>::QubitRegister(std::size_t new_num_qubits,
                                    std::size_t tmp_spacesize_)
 {
   Allocate(new_num_qubits, tmp_spacesize_);
-  Initialize(style, base_index);
+  //Initialize(style, base_index);
 }
 
 
@@ -468,8 +557,25 @@ void QubitRegister<Type>::TurnOffSpecialize()
 template <class Type>
 QubitRegister<Type>::~QubitRegister()
 {
+  for (int i = 0; i < num_block; i++) free(list_compressed_blk[i]);
+  ClearCache();
 #if defined(USE_MM_MALLOC)
-  _mm_free(state); 
+#if defined(USE_MKL_MALLOC)
+  mkl_free(state);
+  mkl_free(tmp_state);
+  mkl_free(list_compressed_blk);
+  mkl_free(list_len);
+  mkl_free(list_cache_blk);
+  mkl_free(list_cache_len);
+#else
+  _mm_free(state);
+  _mm_free(tmp_state);
+  free(list_compressed_blk);
+  free(list_len);
+  free(list_cache_blk);
+  free(list_cache_len);
+#endif
+
 #endif
   if (timer) delete timer;
   if (permutation) delete permutation;
