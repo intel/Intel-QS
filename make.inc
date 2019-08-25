@@ -14,23 +14,28 @@
 ## limitations under the License.
 ##------------------------------------------------------------------------------
 
-bigmpi = 0
+bigmpi = 1
 
 HOST = $(shell hostname)
 
 CC = g++
 CC = CC -mkl -no-ipo
 CC = mpicxx
-CC = mpiicpc
+CC = mpiicpc -mkl -no-ipo
 
-OPTS = -g -O3
-VECS = -qopt-report-phase=vec -qopt-report=2
+#OPTS = -g -O3
+OPTS = -O3 -xMIC-AVX512 -dynamic -mcmodel=large 
+#VECS = -qopt-report-phase=vec -qopt-report=2
 DEFS = -DUSE_MM_MALLOC -DSTANDALONE -DINTELQS_HAS_MPI -DMKL_ILP64
+DEFS = -DUSE_MM_MALLOC -DSTANDALONE -DINTELQS_HAS_MPI -DMKL_ILP64 -DUSE_MKL_MALLOC
 
-BIGMPI_LIB = /opt/bigmpi/lib/libbigmpi.a
-BIGMPI_INC = -I/opt/bigmpi/include
+BIGMPI_LIB = /home/xinchuan/prebuilt/BigMPI/.libs/libbigmpi.a
+BIGMPI_INC = -I/home/xinchuan/prebuilt/BigMPI/src
 
-CFLAGS = ${OPTS} ${DEFS} \
+SZ_LIB = /home/xinchuan/SZ_out/lib/libSZ.a /home/xinchuan/SZ_out/lib/libzlib.a /home/xinchuan/SZ_out/lib/libzstd.a
+SZ_INC = -I/home/xinchuan/SZ_out/include
+
+CFLAGS = ${OPTS} ${DEFS} ${SZ_INC}\
          -Wall -std=c++11 -qopenmp #-restrict \
 # -fasm-blocks
 
@@ -44,7 +49,7 @@ ifeq ($(bigmpi),1)
  INC := ${INC} ${BIGMPI_INC}
 endif
 
-########### Modified for the ccefw-desktop environment ############
+########### Modified for the ccefw-desktop.jf.intel.com environment ############
 ifeq ($(HOST),ccefw-desktop)
  CC = g++
  CC = /opt/intel/impi/2017.2.174/bin64/mpicxx
