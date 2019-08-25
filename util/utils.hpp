@@ -136,3 +136,39 @@ int MPI_Sendrecv_x(ComplexDP *sendbuf, size_t sendcount,
 #endif //BIGMPI
 }
 
+static
+int MPI_Sendrecv_x(size_t *sendbuf, size_t sendcount,
+                   size_t dest, size_t sendtag,
+                   size_t *recvbuf, size_t recvcount,
+                   size_t source, size_t recvtag,
+                   MPI_Comm comm, MPI_Status *status)
+{
+#ifdef BIGMPI
+    return
+    MPIX_Sendrecv_x((void *)sendbuf, sendcount, MPI_UINT64_T, dest, sendtag,
+                 (void *)recvbuf, recvcount, MPI_UINT64_T, source, recvtag, comm, status);
+#else
+    return
+    MPI_Sendrecv((void *)sendbuf, sendcount, MPI_UINT64_T, dest, sendtag,
+                 (void *)recvbuf, recvcount, MPI_UINT64_T, source, recvtag, comm, status);
+#endif //BIGMPI
+}
+
+static
+int MPI_Sendrecv_x(unsigned char *sendbuf, size_t sendcount,
+                   size_t dest, size_t sendtag,
+                   unsigned char *recvbuf, size_t recvcount,
+                   size_t source, size_t recvtag,
+                   MPI_Comm comm, MPI_Status *status)
+{
+#ifdef BIGMPI
+    return
+    MPIX_Sendrecv_x((void *)sendbuf, sendcount, MPI_BYTE, dest, sendtag,
+                 (void *)recvbuf, recvcount, MPI_BYTE, source, recvtag, comm, status);
+#else
+    return
+    MPI_Sendrecv((void *)sendbuf, sendcount, MPI_BYTE, dest, sendtag,
+                 (void *)recvbuf, recvcount, MPI_BYTE, source, recvtag, comm, status);
+#endif //BIGMPI
+}
+
