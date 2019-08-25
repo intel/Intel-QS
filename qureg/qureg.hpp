@@ -39,6 +39,9 @@
 #include <tuple>
 #include <vector>
 
+#include "sz.h"
+#include <ctime>
+
 #if defined(__ICC) || defined(__INTEL_COMPILER)
 #include <mkl.h>
 #endif
@@ -234,6 +237,54 @@ class QubitRegister
 
   double HP_Distrpair(unsigned pos, TM2x2<Type> const&m);
   double HP_Distrpair(unsigned control, unsigned qubit, TM2x2<Type> const&m);
+
+  // SZ
+  void CompressState();
+  void DecompressState();
+  void OutputStatesToFile(int count);
+  unsigned char* BlkCompress(double* data_blk, size_t* comp_len);
+  void BlkDecompress(unsigned char* comp_blk, double* data_blk, size_t comp_len);
+  void CompressLclState(int idx);
+  void DecompressLclState(int idx);
+  void CompressTmpState();
+  void DecompressTmpState();
+  void OutputLclState(int idx);
+  double SZ_HP_Distrpair(unsigned pos, TM2x2<Type> const&m);
+  double SZ_HP_Distrpair(unsigned control, unsigned qubit, TM2x2<Type> const&m);
+  void CompressionInfo();
+  void OutputCompressedByteToFile();
+  void InputCompressedByteFromFile();
+  int CheckCache(int idx_1, unsigned char* b1, size_t len_1);
+  int CheckCache(int idx_1, unsigned char* b1, size_t len_1, int idx_2, unsigned char* b2, size_t len_2);
+  void SetCache(int idx_1, unsigned char* b1, size_t len_1);
+  void SetCache(int idx_1, unsigned char* b1, size_t len_1, int idx_2, unsigned char* b2, size_t len_2);
+  void ClearCache();
+  void CopyCompressedBlk(int dest, int src);
+  int CmpBlk(unsigned char* b1, size_t len_1, unsigned char* b2, size_t len_2);
+  unsigned char **list_compressed_blk;
+  size_t *list_len;
+  unsigned char *tmp_compressed_blk;
+  size_t tmp_len;
+  unsigned char **list_cache_blk;
+  size_t *list_cache_len;
+  int num_cache_line;
+  int cache_top;
+  size_t block_size;
+  int num_block;
+  Type *tmp_state;
+  double compression_time;
+  double decompression_time;
+  double compute_time;
+  double network_time;
+  double remain_space;
+  int enable_blk_cache;
+  int hit_rate_0_count;
+  double blk_cache_hit;
+  double blk_cache_miss;
+  size_t blk_cache_size;
+  int compress_level;
+  unsigned int x_rpn;
+  int lossy;
 
   // Members
   std::size_t num_qubits;
