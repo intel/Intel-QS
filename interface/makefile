@@ -22,6 +22,8 @@ ifeq ($(bigmpi),1)
  LDFLAGS := ${BIGMPI_LIB} ${LDFLAGS}
 endif
 
+LDFLAGS := ${LDFLAGS} ${SZ_LIB}
+
 SRC  = $(wildcard *.cpp)
 OBJS = $(addsuffix .o, $(basename $(SRC)))
 EXEC = qasm_interface.exe
