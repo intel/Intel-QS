@@ -18,22 +18,19 @@ bigmpi = 1
 
 HOST = $(shell hostname)
 
-CC = g++
-CC = CC -mkl -no-ipo
-CC = mpicxx
-CC = mpiicpc -mkl -no-ipo
+CC = CC 
 
-#OPTS = -g -O3
-OPTS = -O3 -xMIC-AVX512 -dynamic -mcmodel=large 
-#VECS = -qopt-report-phase=vec -qopt-report=2
+OPTS = -O3 -dynamic -mcmodel=large -xMIC-AVX512
+VECS = -xMIC-AVX512
+
 DEFS = -DUSE_MM_MALLOC -DSTANDALONE -DINTELQS_HAS_MPI -DMKL_ILP64
 DEFS = -DUSE_MM_MALLOC -DSTANDALONE -DINTELQS_HAS_MPI -DMKL_ILP64 -DUSE_MKL_MALLOC
 
 BIGMPI_LIB = /home/xinchuan/prebuilt/BigMPI/.libs/libbigmpi.a
 BIGMPI_INC = -I/home/xinchuan/prebuilt/BigMPI/src
 
-SZ_LIB = /home/xinchuan/SZ_out/lib/libSZ.a /home/xinchuan/SZ_out/lib/libzlib.a /home/xinchuan/SZ_out/lib/libzstd.a
-SZ_INC = -I/home/xinchuan/SZ_out/include
+SZ_LIB = /projects/QCSim/SZ_out/lib/libSZ.a /projects/QCSim/SZ_out/lib/libzlib.a /projects/QCSim/SZ_out/lib/libzstd.a
+SZ_INC = -I/projects/QCSim/SZ_out/include
 
 CFLAGS = ${OPTS} ${DEFS} ${SZ_INC}\
          -Wall -std=c++11 -qopenmp #-restrict \
